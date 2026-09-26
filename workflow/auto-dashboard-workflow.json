@@ -1,0 +1,106 @@
+{
+  "name": "Auto Dashboard Pipeline (Python Backend)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            { "mode": "everyMinute" }
+          ]
+        },
+        "documentId": { "__rl": true, "mode": "list", "value": "" },
+        "sheetName": { "__rl": true, "mode": "list", "value": "Raw Data" },
+        "event": "rowAdded"
+      },
+      "id": "1",
+      "name": "Google Sheets Trigger",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [180, 300],
+      "notes": "Fires when a new row is added to your 'Raw Data' sheet. Set your real spreadsheet after import."
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "mode": "list", "value": "" },
+        "sheetName": { "__rl": true, "mode": "list", "value": "Raw Data" },
+        "operation": "read"
+      },
+      "id": "2",
+      "name": "Read Raw Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [400, 300],
+      "notes": "Pulls the full current dataset as JSON rows."
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# Light pre-clean in n8n's built-in Python (Pyodide) sandbox.\n# Pyodide here only has the Python standard library available (no pip installs,\n# no pandas, no network) -- the heavy cleaning/dedup happens in the FastAPI\n# backend, which has full pandas. This step just trims and drops obviously\n# empty rows before sending the batch onward.\n\ncleaned = []\nfor item in items:\n    row = dict(item['json'])\n    for key, value in row.items():\n        if isinstance(value, str):\n            row[key] = value.strip()\n    has_content = any(v not in ('', None) for v in row.values())\n    if has_content:\n        cleaned.append({'json': row})\n\nreturn cleaned\n"
+      },
+      "id": "3",
+      "name": "Python Pre-clean",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, 300],
+      "notes": "n8n Code node set to Python mode. Trims strings and drops fully-empty rows before the backend call."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"rows\": $input.all().map(function(i) { return i.json; }) } }}",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Send to Python Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 300],
+      "notes": "Calls the FastAPI backend's /api/ingest endpoint. It cleans with pandas, dedupes, stores in SQLite, and returns the cleaned rows. Replace localhost:8000 with your deployed backend URL if hosted remotely."
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "mode": "list", "value": "" },
+        "sheetName": { "__rl": true, "mode": "list", "value": "Dashboard Data" },
+        "operation": "appendOrUpdate",
+        "columns": { "mappingMode": "autoMapInputData" }
+      },
+      "id": "5",
+      "name": "Mirror to Dashboard Data Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1060, 300],
+      "notes": "Optional: writes the backend's cleaned_rows back into the Dashboard Data tab, so you still have a human-readable copy in Sheets. The live dashboard itself reads from the backend API, not this sheet."
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Auto Dashboard Pipeline failed at node: {{$json[\"node\"] || 'unknown'}}. Check the n8n execution log and the backend's uvicorn logs."
+      },
+      "id": "6",
+      "name": "Notify on Error",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [620, 500],
+      "notes": "Replace this NoOp with a Slack, Email, or Telegram node. Connect via Settings > Error Workflow for full coverage."
+    }
+  ],
+  "connections": {
+    "Google Sheets Trigger": {
+      "main": [[{ "node": "Read Raw Data", "type": "main", "index": 0 }]]
+    },
+    "Read Raw Data": {
+      "main": [[{ "node": "Python Pre-clean", "type": "main", "index": 0 }]]
+    },
+    "Python Pre-clean": {
+      "main": [[{ "node": "Send to Python Backend", "type": "main", "index": 0 }]]
+    },
+    "Send to Python Backend": {
+      "main": [[{ "node": "Mirror to Dashboard Data Sheet", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
